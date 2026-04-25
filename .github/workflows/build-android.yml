@@ -12,7 +12,17 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: false
+        default: 'both'
+        type: choice
+        options:
+          - debug
+          - release
+          - both
 
 jobs:
   buildForAndroid:
@@ -39,6 +49,7 @@ jobs:
         uses: jlumbroso/free-disk-space@main
 
       - name: Build Android APK (unsigned debug)
+        if: ${{ github.event.inputs.build_type != 'release' }}
         uses: game-ci/unity-builder@v4
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
@@ -52,7 +63,7 @@ jobs:
           buildName: NomadGo-SpatialVision-debug
 
       - name: Build Android APK (signed release)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASS != '' && secrets.ANDROID_KEYALIAS_NAME != '' && secrets.ANDROID_KEYALIAS_PASS != '' }}
+        if: ${{ github.event.inputs.build_type != 'debug' && secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         uses: game-ci/unity-builder@v4
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
@@ -73,6 +84,7 @@ jobs:
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: NomadGo-SpatialVision-APK
+          name: NomadGo-SpatialVision-APK-${{ github.sha }}
           path: build/Android
           retention-days: 14
+          if-no-files-found: warn
