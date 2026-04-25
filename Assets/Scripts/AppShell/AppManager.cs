@@ -111,13 +111,22 @@ namespace NomadGo.AppShell
                 arSession.enabled = true;
             }
 
+            var visionProcessor = FindObjectOfType<Vision.FrameProcessor>();
+            if (visionProcessor != null)
+            {
+                if (!visionProcessor.CanStartProcessing)
+                {
+                    Debug.LogError($"[AppManager] Cannot start scan — FrameProcessor state is {visionProcessor.State}.");
+                    return;
+                }
+            }
+
             var sessionStorage = FindObjectOfType<Storage.SessionStorage>();
             if (sessionStorage != null)
             {
                 sessionStorage.StartNewSession();
             }
 
-            var visionProcessor = FindObjectOfType<Vision.FrameProcessor>();
             if (visionProcessor != null)
             {
                 visionProcessor.StartProcessing();

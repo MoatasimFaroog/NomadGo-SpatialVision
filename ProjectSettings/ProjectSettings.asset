@@ -173,7 +173,7 @@ PlayerSettings:
   stripEngineCode: 1
   iPhoneStrippingLevel: 0
   iPhoneScriptCallOptimization: 0
-  ForceInternetPermission: 0
+  ForceInternetPermission: 1
   ForceSDCardPermission: 0
   CreateWallpaper: 0
   APKExpansionFiles: 0
@@ -209,7 +209,7 @@ PlayerSettings:
   clonedFromGUID: c0afd0d1d80e3634a9dac47571a4a258
   templatePackageId: com.unity.template.3d@8.1.2
   templateDefaultScene: Assets/Scenes/Main.unity
-  useCustomMainManifest: 0
+  useCustomMainManifest: 1
   useCustomLauncherManifest: 0
   useCustomMainGradleTemplate: 0
   useCustomLauncherGradleTemplate: 0
@@ -278,7 +278,7 @@ PlayerSettings:
   m_NeedSecureTeam: 0
   m_Datestamp: 0000000000000000
   scriptingDefineSymbols:
-    Android: UNITY_AR;NOMADGO_SPATIAL;ONNX_RUNTIME
+    Android: UNITY_AR;NOMADGO_SPATIAL
     Standalone: UNITY_STANDALONE
   additionalCompilerArguments: {}
   platformArchitecture: {}

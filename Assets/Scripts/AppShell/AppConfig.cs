@@ -61,6 +61,7 @@ namespace NomadGo.AppShell
         public float retry_base_delay_seconds;
         public float retry_max_delay_seconds;
         public bool queue_persistent;
+        public bool enabled = false;
     }
 
     [Serializable]

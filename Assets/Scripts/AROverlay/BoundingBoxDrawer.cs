@@ -38,7 +38,7 @@ namespace NomadGo.AROverlay
 
         public void DrawBox(DetectionResult detection)
         {
-            if (lineMaterial == null) return;
+            if (lineMaterial == null || detection == null) return;
 
             Color color = detection.confidence >= highConfidenceThreshold
                 ? highConfidenceColor
@@ -109,7 +109,14 @@ namespace NomadGo.AROverlay
         {
             if (lineMaterial != null)
             {
-                DestroyImmediate(lineMaterial);
+                if (Application.isPlaying)
+                {
+                    Destroy(lineMaterial);
+                }
+                else
+                {
+                    DestroyImmediate(lineMaterial);
+                }
             }
         }
     }

@@ -34,8 +34,8 @@ namespace NomadGo.Counting
 
         public void Initialize(float iouThreshold, int maxAge)
         {
-            this.iouThreshold = iouThreshold;
-            this.maxAge = maxAge;
+            this.iouThreshold = Mathf.Clamp(iouThreshold, 0.05f, 0.95f);
+            this.maxAge = Mathf.Max(1, maxAge);
             trackedObjects.Clear();
             nextTrackingId = 1;
             Debug.Log($"[IOUTracker] Initialized. IOU threshold: {iouThreshold}, Max age: {maxAge}");
@@ -43,6 +43,11 @@ namespace NomadGo.Counting
 
         public List<DetectionResult> UpdateTracks(List<DetectionResult> detections)
         {
+            if (detections == null)
+            {
+                detections = new List<DetectionResult>();
+            }
+
             foreach (var track in trackedObjects)
             {
                 track.age++;
