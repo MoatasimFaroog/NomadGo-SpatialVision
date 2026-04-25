@@ -31,3 +31,7 @@ model.export(format='onnx', imgsz=640, opset=12)
 
 ## Labels
 The `labels.txt` file in this directory must match the class order of your ONNX model output.
+
+
+## Production Runtime Source
+The runtime loader reads model and labels only from `Assets/StreamingAssets/Models/`.

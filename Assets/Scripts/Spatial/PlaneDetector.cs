@@ -47,10 +47,8 @@ namespace NomadGo.Spatial
                         planeManager.requestedDetectionMode = PlaneDetectionMode.Vertical;
                         break;
                     case "Everything":
-                        planeManager.requestedDetectionMode = PlaneDetectionMode.Horizontal | PlaneDetectionMode.Vertical;
-                        break;
                     default:
-                        planeManager.requestedDetectionMode = PlaneDetectionMode.Horizontal;
+                        planeManager.requestedDetectionMode = PlaneDetectionMode.Horizontal | PlaneDetectionMode.Vertical;
                         break;
                 }
             }

@@ -40,3 +40,7 @@ Thumbs.db
 # Replit
 .replit
 replit.nix
+
+.vs/
+*.csproj
+*.sln

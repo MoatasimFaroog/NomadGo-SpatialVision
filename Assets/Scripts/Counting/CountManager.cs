@@ -42,9 +42,37 @@ namespace NomadGo.Counting
 
         private void OnNewDetections(List<DetectionResult> detections)
         {
-            List<DetectionResult> tracked = iouTracker.UpdateTracks(detections);
+            if (iouTracker == null || rowClusterEngine == null)
+            {
+                Debug.LogError("[CountManager] Tracker dependencies are missing.");
+                return;
+            }
 
-            currentClusters = rowClusterEngine.ClusterDetections(tracked);
+            List<DetectionResult> tracked = iouTracker.UpdateTracks(detections);
+            List<DetectionResult> uniqueTracked = new List<DetectionResult>();
+            HashSet<int> seenIds = new HashSet<int>();
+
+            foreach (var detection in tracked)
+            {
+                if (detection == null)
+                {
+                    continue;
+                }
+
+                if (detection.trackingId > 0)
+                {
+                    if (seenIds.Add(detection.trackingId))
+                    {
+                        uniqueTracked.Add(detection);
+                    }
+                }
+                else
+                {
+                    uniqueTracked.Add(detection);
+                }
+            }
+
+            currentClusters = rowClusterEngine.ClusterDetections(uniqueTracked);
 
             currentCounts = rowClusterEngine.GetCountsByLabel(currentClusters);
             totalCount = rowClusterEngine.GetTotalCount(currentClusters);

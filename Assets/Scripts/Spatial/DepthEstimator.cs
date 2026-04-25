@@ -1,6 +1,8 @@
+using System;
+using Unity.Collections;
 using UnityEngine;
 using UnityEngine.XR.ARFoundation;
-using Unity.Collections;
+using UnityEngine.XR.ARSubsystems;
 
 namespace NomadGo.Spatial
 {
@@ -8,39 +10,78 @@ namespace NomadGo.Spatial
     {
         [SerializeField] private AROcclusionManager occlusionManager;
 
-        private bool depthAvailable = false;
+        private bool depthAvailable;
+        private bool loggedUnsupported;
 
         public bool DepthAvailable => depthAvailable;
 
         private void Update()
         {
-            if (occlusionManager == null) return;
-
-            var envDepth = occlusionManager.environmentDepthTexture;
-            depthAvailable = envDepth != null;
+            depthAvailable = occlusionManager != null &&
+                             occlusionManager.descriptor != null &&
+                             occlusionManager.descriptor.supportsEnvironmentDepthImage;
         }
 
         public float EstimateDepthAtScreenPoint(Vector2 normalizedScreenPoint)
         {
-            if (occlusionManager == null || !depthAvailable)
+            if (!depthAvailable || occlusionManager == null)
             {
                 return -1f;
             }
 
-            var depthTexture = occlusionManager.environmentDepthTexture;
-            if (depthTexture == null) return -1f;
+            if (!occlusionManager.TryAcquireEnvironmentDepthCpuImage(out XRCpuImage depthImage))
+            {
+                if (!loggedUnsupported)
+                {
+                    loggedUnsupported = true;
+                    Debug.LogWarning("[DepthEstimator] Environment depth CPU image unavailable on this frame/device.");
+                }
 
-            int x = Mathf.Clamp((int)(normalizedScreenPoint.x * depthTexture.width), 0, depthTexture.width - 1);
-            int y = Mathf.Clamp((int)(normalizedScreenPoint.y * depthTexture.height), 0, depthTexture.height - 1);
+                return -1f;
+            }
 
-            var pixels = depthTexture.GetPixels();
-            if (pixels == null || pixels.Length == 0) return -1f;
+            try
+            {
+                int x = Mathf.Clamp(Mathf.RoundToInt(normalizedScreenPoint.x * (depthImage.width - 1)), 0, depthImage.width - 1);
+                int y = Mathf.Clamp(Mathf.RoundToInt(normalizedScreenPoint.y * (depthImage.height - 1)), 0, depthImage.height - 1);
 
-            int index = y * depthTexture.width + x;
-            if (index < 0 || index >= pixels.Length) return -1f;
+                var conversionParams = new XRCpuImage.ConversionParams
+                {
+                    inputRect = new RectInt(x, y, 1, 1),
+                    outputDimensions = new Vector2Int(1, 1),
+                    outputFormat = TextureFormat.RFloat,
+                    transformation = XRCpuImage.Transformation.None
+                };
 
-            float depth = pixels[index].r;
-            return depth;
+                int size = depthImage.GetConvertedDataSize(conversionParams);
+                if (size < sizeof(float))
+                {
+                    return -1f;
+                }
+
+                NativeArray<byte> depthBytes = new NativeArray<byte>(size, Allocator.Temp);
+                try
+                {
+                    depthImage.Convert(conversionParams, depthBytes);
+                    byte[] managed = depthBytes.ToArray();
+                    float depthMeters = BitConverter.ToSingle(managed, 0);
+
+                    if (float.IsNaN(depthMeters) || float.IsInfinity(depthMeters) || depthMeters <= 0f)
+                    {
+                        return -1f;
+                    }
+
+                    return depthMeters;
+                }
+                finally
+                {
+                    depthBytes.Dispose();
+                }
+            }
+            finally
+            {
+                depthImage.Dispose();
+            }
         }
 
         public float EstimateDepthAtBoundingBox(Rect boundingBox)
@@ -51,18 +92,30 @@ namespace NomadGo.Spatial
             );
 
             float centerDepth = EstimateDepthAtScreenPoint(center);
-            if (centerDepth < 0) return -1f;
+            if (centerDepth < 0f)
+            {
+                return -1f;
+            }
 
             float topDepth = EstimateDepthAtScreenPoint(new Vector2(center.x, boundingBox.yMin));
             float bottomDepth = EstimateDepthAtScreenPoint(new Vector2(center.x, boundingBox.yMax));
 
-            float avgDepth = centerDepth;
+            float total = centerDepth;
             int count = 1;
 
-            if (topDepth > 0) { avgDepth += topDepth; count++; }
-            if (bottomDepth > 0) { avgDepth += bottomDepth; count++; }
+            if (topDepth > 0f)
+            {
+                total += topDepth;
+                count++;
+            }
 
-            return avgDepth / count;
+            if (bottomDepth > 0f)
+            {
+                total += bottomDepth;
+                count++;
+            }
+
+            return total / count;
         }
     }
 }

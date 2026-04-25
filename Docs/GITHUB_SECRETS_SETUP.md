@@ -1,71 +1,28 @@
-# إعداد GitHub Secrets لمشروع NomadGo SpatialVision
+# GitHub Secrets Setup (Required for CI Android Builds)
 
-## الخطوات المطلوبة
+Configure these in **GitHub → Settings → Secrets and variables → Actions**.
 
-اذهب إلى مستودعك على GitHub:
-**Settings → Secrets and variables → Actions → New repository secret**
+## Required Unity secrets
 
----
+| Secret | Purpose |
+|---|---|
+| `UNITY_EMAIL` | Unity account email used for CI activation. |
+| `UNITY_PASSWORD` | Unity account password used for CI activation. |
+| `UNITY_LICENSE` | Full contents of a valid Unity `.ulf` license file. |
 
-## Secrets المطلوبة
+## Optional Android signing secrets (release only)
 
-### 1. UNITY_LICENSE
-- اتبع خطوات ملف `Docs/CI_CD_SETUP.md` للحصول على ملف `.ulf`
-- انسخ محتوى الملف كاملاً وضعه في هذا الـ Secret
+> If these are missing, workflow still builds an unsigned debug APK.
 
-### 2. UNITY_EMAIL
-- بريدك الإلكتروني المسجل في Unity
+| Secret | Purpose |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | Base64 encoded release keystore file. |
+| `ANDROID_KEYSTORE_PASS` | Keystore password. |
+| `ANDROID_KEYALIAS_NAME` | Key alias name. |
+| `ANDROID_KEYALIAS_PASS` | Key alias password. |
 
-### 3. UNITY_PASSWORD
-- كلمة مرور حساب Unity الخاص بك
+## Security policy
 
----
-
-## Secrets التوقيع (Release Signing) — القيم جاهزة
-
-### 4. ANDROID_KEYSTORE_BASE64
-تم إنشاء Keystore جاهز. انسخ القيمة من ملف:
-`nomadgo-release.keystore.base64`
-
-**معلومات الـ Keystore:**
-- Alias: `nomadgo`
-- Store Password: `NomadGo@2026!`
-- Key Password: `NomadGo@2026!`
-- Validity: 10,000 days (~27 years)
-- Algorithm: RSA 2048-bit
-- Organization: NomadGo, Riyadh, SA
-
-### 5. ANDROID_KEYSTORE_PASS
-```
-NomadGo@2026!
-```
-
-### 6. ANDROID_KEYALIAS_NAME
-```
-nomadgo
-```
-
-### 7. ANDROID_KEYALIAS_PASS
-```
-NomadGo@2026!
-```
-
----
-
-## ملاحظات مهمة
-
-> **احتفظ بملف `nomadgo-release.keystore` في مكان آمن!**
-> إذا فقدت هذا الملف، لن تستطيع تحديث التطبيق على Google Play.
-
-> **لا ترفع الـ Keystore أو كلمات المرور على GitHub مباشرة.**
-> استخدم GitHub Secrets فقط.
-
----
-
-## بعد إضافة جميع الـ Secrets
-
-1. اذهب إلى **Actions** في مستودعك
-2. اضغط على **Build Android APK (Release)**
-3. اضغط **Run workflow**
-4. انتظر 15-30 دقيقة
-5. حمّل الـ APK من **Artifacts** أو من **Releases**
+- Never commit keystore files or passwords to the repository.
+- Never hardcode signing credentials in workflow files or docs.
+- Rotate secrets immediately if exposed.

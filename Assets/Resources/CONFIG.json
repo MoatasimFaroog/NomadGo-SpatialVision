@@ -22,16 +22,17 @@
   },
   "spatial": {
     "enable_depth_refinement": false,
-    "plane_detection_mode": "Horizontal",
+    "plane_detection_mode": "Everything",
     "max_plane_count": 10
   },
   "sync": {
-    "base_url": "http://localhost:5000/api/pulse",
+    "base_url": "https://api.nomadgo.example.com/api/pulse",
     "pulse_interval_seconds": 5,
     "retry_max_attempts": 5,
     "retry_base_delay_seconds": 2,
     "retry_max_delay_seconds": 60,
-    "queue_persistent": true
+    "queue_persistent": true,
+    "enabled": false
   },
   "storage": {
     "provider": "json",

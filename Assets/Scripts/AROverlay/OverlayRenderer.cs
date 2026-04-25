@@ -43,14 +43,14 @@ namespace NomadGo.AROverlay
 
         private void OnDetectionsUpdated(List<DetectionResult> detections)
         {
-            currentDetections = detections;
+            currentDetections = detections ?? new List<DetectionResult>();
         }
 
         private void OnCountsUpdated(int total, Dictionary<string, int> counts, List<RowCluster> clusters)
         {
             totalCount = total;
             countsByLabel = counts;
-            currentClusters = clusters;
+            currentClusters = clusters ?? new List<RowCluster>();
         }
 
         private void InitializeStyles()
@@ -116,7 +116,7 @@ namespace NomadGo.AROverlay
                 GUI.Box(new Rect(box.x, box.y, lineWidth, box.height), GUIContent.none, boxStyle);
                 GUI.Box(new Rect(box.xMax - lineWidth, box.y, lineWidth, box.height), GUIContent.none, boxStyle);
 
-                string labelText = $"{det.label} {det.confidence:F0}%";
+                string labelText = $"{det.label} {(det.confidence * 100f):F0}%";
                 Vector2 labelSize = labelStyle.CalcSize(new GUIContent(labelText));
                 Rect labelRect = new Rect(box.x, box.y - labelSize.y - 2, labelSize.x + 8, labelSize.y + 4);
                 GUI.Label(labelRect, labelText, labelStyle);
@@ -156,6 +156,12 @@ namespace NomadGo.AROverlay
             if (countManager != null)
             {
                 countManager.OnCountsUpdated -= OnCountsUpdated;
+            }
+
+            var frameProcessor = FindObjectOfType<FrameProcessor>();
+            if (frameProcessor != null)
+            {
+                frameProcessor.OnDetectionsUpdated -= OnDetectionsUpdated;
             }
         }
     }

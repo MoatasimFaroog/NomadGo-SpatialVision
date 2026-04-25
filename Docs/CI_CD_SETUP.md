@@ -72,7 +72,7 @@ Add these secrets:
 | `UNITY_EMAIL` | Your Unity account email |
 | `UNITY_PASSWORD` | Your Unity account password |
 
-### Optional: For signed APK (needed for Google Play)
+### Optional: For signed release APK (Google Play)
 
 | Secret Name | Value |
 |---|---|
@@ -92,22 +92,20 @@ Copy the contents of `keystore.base64.txt` into the `ANDROID_KEYSTORE_BASE64` se
 
 ---
 
-## Step 4: Add Your ONNX Model
+## Step 4: Model and labels required at runtime
 
-Before the build will work, you need to add the YOLO model:
+Place these files exactly here:
 
-1. Download `yolov8n.onnx` from: https://github.com/ultralytics/assets/releases
-2. Place it in: `Assets/StreamingAssets/Models/yolov8n.onnx`
-3. Commit and push:
-```powershell
-git add Assets/StreamingAssets/Models/yolov8n.onnx
-git commit -m "Add YOLO model"
-git push
-```
+1. `Assets/StreamingAssets/Models/yolov8n.onnx`
+2. `Assets/StreamingAssets/Models/labels.txt`
+
+The app intentionally blocks scanning when either file is missing.
 
 ---
 
 ## Step 5: Run the Build
+
+If signing secrets are missing, CI still produces an **unsigned debug APK**.
 
 ### Automatic
 The build runs automatically when you push to `main` (only when files in `Assets/`, `Packages/`, or `ProjectSettings/` change).

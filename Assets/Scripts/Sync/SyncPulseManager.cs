@@ -16,6 +16,7 @@ namespace NomadGo.Sync
         private int retryMaxAttempts = 5;
         private float retryBaseDelay = 2f;
         private float retryMaxDelay = 60f;
+        private bool syncEnabled = false;
         private bool isPulsing = false;
         private Coroutine pulseCoroutine;
         private int totalPulsesSent = 0;
@@ -28,6 +29,7 @@ namespace NomadGo.Sync
         public void Initialize(AppShell.SyncConfig config)
         {
             baseUrl = config.base_url;
+            syncEnabled = config.enabled;
             pulseInterval = config.pulse_interval_seconds;
             retryMaxAttempts = config.retry_max_attempts;
             retryBaseDelay = config.retry_base_delay_seconds;
@@ -41,6 +43,27 @@ namespace NomadGo.Sync
 
             pulseQueue.Initialize(config.queue_persistent);
 
+            if (!syncEnabled)
+            {
+                Debug.Log("[SyncPulse] Disabled via CONFIG.sync.enabled.");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(baseUrl) || !Uri.TryCreate(baseUrl, UriKind.Absolute, out Uri validatedUri) ||
+                (validatedUri.Scheme != Uri.UriSchemeHttp && validatedUri.Scheme != Uri.UriSchemeHttps))
+            {
+                syncEnabled = false;
+                Debug.LogWarning("[SyncPulse] Disabled due to invalid base_url. Provide a valid absolute http/https URL.");
+                return;
+            }
+
+            if (validatedUri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || validatedUri.Host == "127.0.0.1")
+            {
+                syncEnabled = false;
+                Debug.LogWarning("[SyncPulse] Disabled because localhost is invalid for on-device mobile networking.");
+                return;
+            }
+
             networkMonitor.OnNetworkStatusChanged += OnNetworkStatusChanged;
 
             Debug.Log($"[SyncPulse] Initialized. URL: {baseUrl}, Interval: {pulseInterval}s");
@@ -48,6 +71,7 @@ namespace NomadGo.Sync
 
         public void StartPulsing()
         {
+            if (!syncEnabled) return;
             if (isPulsing) return;
             isPulsing = true;
             pulseCoroutine = StartCoroutine(PulseLoop());
@@ -155,6 +179,12 @@ namespace NomadGo.Sync
 
         private IEnumerator SendPulse(PulseData pulse, Action<bool> callback)
         {
+            if (!syncEnabled)
+            {
+                callback(false);
+                yield break;
+            }
+
             string json = JsonUtility.ToJson(pulse);
 
             using (UnityWebRequest request = new UnityWebRequest(baseUrl, "POST"))

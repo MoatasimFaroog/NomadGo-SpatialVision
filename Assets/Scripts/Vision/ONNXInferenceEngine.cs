@@ -1,332 +1,617 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using UnityEngine;
-#if ONNX_RUNTIME
-using Microsoft.ML.OnnxRuntime;
-using Microsoft.ML.OnnxRuntime.Tensors;
-#endif
+using UnityEngine.Networking;
 
 namespace NomadGo.Vision
 {
     public class ONNXInferenceEngine : MonoBehaviour
     {
-        private string modelPath;
-        private string labelsPath;
+        private const string CanonicalModelRelativePath = "Models/yolov8n.onnx";
+        private const string CanonicalLabelsRelativePath = "Models/labels.txt";
+
         private int inputWidth = 640;
         private int inputHeight = 640;
         private float confidenceThreshold = 0.45f;
         private float nmsThreshold = 0.5f;
         private int maxDetections = 100;
-        private string[] labels;
-        private bool isLoaded = false;
-        private float lastInferenceTimeMs = 0f;
 
-#if ONNX_RUNTIME
-        private InferenceSession session;
-        private string inputName;
-        private string outputName;
-#endif
+        private string[] labels = Array.Empty<string>();
+        private bool isLoaded;
+        private bool isLoading;
+        private string lastError;
+        private float lastInferenceTimeMs;
+
+        private object runtimeModel;
+        private object worker;
+        private MethodInfo modelLoadFromBytes;
+        private MethodInfo workerCreate;
+        private MethodInfo workerExecute;
+        private MethodInfo workerPeekOutput;
+        private MethodInfo textureToTensor;
 
         public bool IsLoaded => isLoaded;
+        public bool IsLoading => isLoading;
         public float LastInferenceTimeMs => lastInferenceTimeMs;
+        public string LastError => lastError;
+
+        public event Action<bool, string> OnEngineReadyChanged;
 
         public void Initialize(AppShell.ModelConfig config)
         {
-            modelPath = config.path;
-            labelsPath = config.labels_path;
-            inputWidth = config.input_width;
-            inputHeight = config.input_height;
-            confidenceThreshold = config.confidence_threshold;
-            nmsThreshold = config.nms_threshold;
-            maxDetections = config.max_detections;
+            inputWidth = Mathf.Max(1, config.input_width);
+            inputHeight = Mathf.Max(1, config.input_height);
+            confidenceThreshold = Mathf.Clamp01(config.confidence_threshold);
+            nmsThreshold = Mathf.Clamp01(config.nms_threshold);
+            maxDetections = Mathf.Max(1, config.max_detections);
 
-            LoadLabels();
-            LoadModel();
+            if (!string.Equals(config.path, CanonicalModelRelativePath, StringComparison.Ordinal))
+            {
+                Debug.LogWarning($"[ONNXEngine] Ignoring non-canonical model path '{config.path}'. Using StreamingAssets/{CanonicalModelRelativePath}.");
+            }
+
+            if (!string.Equals(config.labels_path, CanonicalLabelsRelativePath, StringComparison.Ordinal))
+            {
+                Debug.LogWarning($"[ONNXEngine] Ignoring non-canonical labels path '{config.labels_path}'. Using StreamingAssets/{CanonicalLabelsRelativePath}.");
+            }
+
+            if (isLoading)
+            {
+                return;
+            }
+
+            StartCoroutine(InitializeRoutine());
         }
 
-        private void LoadLabels()
+        private IEnumerator InitializeRoutine()
         {
-            TextAsset labelsAsset = Resources.Load<TextAsset>(labelsPath.Replace(".txt", "").Replace("Models/", ""));
-            if (labelsAsset == null)
+            isLoaded = false;
+            isLoading = true;
+            lastError = null;
+
+            yield return LoadLabelsRoutine();
+            if (!string.IsNullOrEmpty(lastError))
             {
-                labelsAsset = Resources.Load<TextAsset>("labels");
+                FailInitialization(lastError);
+                yield break;
             }
 
-            if (labelsAsset != null)
+            byte[] modelBytes = null;
+            yield return LoadStreamingAssetBytesRoutine(CanonicalModelRelativePath, bytes => modelBytes = bytes);
+            if (modelBytes == null || modelBytes.Length == 0)
             {
-                labels = labelsAsset.text.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-                Debug.Log($"[ONNXEngine] Loaded {labels.Length} labels.");
+                FailInitialization($"Model file missing or empty at StreamingAssets/{CanonicalModelRelativePath}.");
+                yield break;
             }
-            else
-            {
-                labels = new string[] {
-                    "bottle", "can", "box", "carton", "bag",
-                    "jar", "container", "package", "pouch", "tube"
-                };
-                Debug.LogWarning("[ONNXEngine] Labels file not found. Using default labels.");
-            }
-        }
 
-        private void LoadModel()
-        {
-#if ONNX_RUNTIME
             try
             {
-                string fullModelPath = System.IO.Path.Combine(Application.streamingAssetsPath, modelPath);
-
-                if (!System.IO.File.Exists(fullModelPath))
+                if (!InitializeSentisReflection(modelBytes))
                 {
-                    TextAsset modelAsset = Resources.Load<TextAsset>(modelPath.Replace(".onnx", ""));
-                    if (modelAsset != null)
-                    {
-                        string tempPath = System.IO.Path.Combine(Application.persistentDataPath, "model.onnx");
-                        System.IO.File.WriteAllBytes(tempPath, modelAsset.bytes);
-                        fullModelPath = tempPath;
-                        Debug.Log($"[ONNXEngine] Model extracted to: {fullModelPath}");
-                    }
-                    else
-                    {
-                        Debug.LogError($"[ONNXEngine] Model file not found at: {fullModelPath}");
-                        isLoaded = false;
-                        return;
-                    }
+                    FailInitialization(lastError);
+                    yield break;
                 }
 
-                var sessionOptions = new SessionOptions();
-                sessionOptions.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
-                sessionOptions.InterOpNumThreads = 2;
-                sessionOptions.IntraOpNumThreads = 2;
-                sessionOptions.ExecutionMode = ExecutionMode.ORT_SEQUENTIAL;
-
-                session = new InferenceSession(fullModelPath, sessionOptions);
-
-                inputName = session.InputMetadata.Keys.First();
-                outputName = session.OutputMetadata.Keys.First();
-
-                Debug.Log($"[ONNXEngine] Model loaded successfully from: {fullModelPath}");
-                Debug.Log($"[ONNXEngine] Input: {inputName}, Output: {outputName}");
-                Debug.Log($"[ONNXEngine] Input size: {inputWidth}x{inputHeight}");
-                Debug.Log($"[ONNXEngine] Confidence threshold: {confidenceThreshold}");
-                Debug.Log($"[ONNXEngine] NMS threshold: {nmsThreshold}");
-
                 isLoaded = true;
+                isLoading = false;
+                Debug.Log($"[ONNXEngine] Sentis model loaded from StreamingAssets/{CanonicalModelRelativePath}");
+                OnEngineReadyChanged?.Invoke(true, null);
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[ONNXEngine] Failed to load model: {ex.Message}");
-                Debug.LogError($"[ONNXEngine] Stack trace: {ex.StackTrace}");
-                isLoaded = false;
+                FailInitialization($"Sentis initialization failed: {ex.Message}");
             }
-#else
-            Debug.LogWarning("[ONNXEngine] ONNX Runtime not installed. Add ONNX_RUNTIME to Scripting Define Symbols after importing the package.");
-            Debug.LogWarning("[ONNXEngine] Running in stub mode — no real inference will be performed.");
+        }
+
+        private void FailInitialization(string message)
+        {
+            lastError = message;
+            isLoading = false;
             isLoaded = false;
-#endif
+            Debug.LogError($"[ONNXEngine] {message}");
+            OnEngineReadyChanged?.Invoke(false, lastError);
+        }
+
+        private IEnumerator LoadLabelsRoutine()
+        {
+            string labelsContent = null;
+            yield return LoadStreamingAssetTextRoutine(CanonicalLabelsRelativePath, text => labelsContent = text);
+
+            if (string.IsNullOrWhiteSpace(labelsContent))
+            {
+                lastError = $"Labels file missing or empty at StreamingAssets/{CanonicalLabelsRelativePath}.";
+                yield break;
+            }
+
+            labels = labelsContent
+                .Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim())
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .ToArray();
+
+            if (labels.Length == 0)
+            {
+                lastError = $"No labels found in StreamingAssets/{CanonicalLabelsRelativePath}.";
+                yield break;
+            }
+
+            Debug.Log($"[ONNXEngine] Loaded {labels.Length} labels from StreamingAssets.");
+        }
+
+        private IEnumerator LoadStreamingAssetTextRoutine(string relativePath, Action<string> onLoaded)
+        {
+            string fullPath = Path.Combine(Application.streamingAssetsPath, relativePath);
+
+            if (fullPath.Contains("://") || fullPath.Contains(":///"))
+            {
+                using (UnityWebRequest request = UnityWebRequest.Get(fullPath))
+                {
+                    yield return request.SendWebRequest();
+                    if (request.result == UnityWebRequest.Result.Success)
+                    {
+                        onLoaded?.Invoke(request.downloadHandler.text);
+                    }
+                    else
+                    {
+                        onLoaded?.Invoke(null);
+                    }
+                }
+                yield break;
+            }
+
+            if (!File.Exists(fullPath))
+            {
+                onLoaded?.Invoke(null);
+                yield break;
+            }
+
+            onLoaded?.Invoke(File.ReadAllText(fullPath));
+        }
+
+        private IEnumerator LoadStreamingAssetBytesRoutine(string relativePath, Action<byte[]> onLoaded)
+        {
+            string fullPath = Path.Combine(Application.streamingAssetsPath, relativePath);
+
+            if (fullPath.Contains("://") || fullPath.Contains(":///"))
+            {
+                using (UnityWebRequest request = UnityWebRequest.Get(fullPath))
+                {
+                    yield return request.SendWebRequest();
+                    if (request.result == UnityWebRequest.Result.Success)
+                    {
+                        onLoaded?.Invoke(request.downloadHandler.data);
+                    }
+                    else
+                    {
+                        onLoaded?.Invoke(null);
+                    }
+                }
+                yield break;
+            }
+
+            if (!File.Exists(fullPath))
+            {
+                onLoaded?.Invoke(null);
+                yield break;
+            }
+
+            onLoaded?.Invoke(File.ReadAllBytes(fullPath));
+        }
+
+        private bool InitializeSentisReflection(byte[] modelBytes)
+        {
+            Assembly sentisAssembly = AppDomain.CurrentDomain
+                .GetAssemblies()
+                .FirstOrDefault(a => a.GetName().Name == "Unity.Sentis");
+
+            if (sentisAssembly == null)
+            {
+                lastError = "Unity Sentis assembly (Unity.Sentis) not found. Ensure com.unity.sentis is installed.";
+                return false;
+            }
+
+            Type modelLoaderType = sentisAssembly.GetType("Unity.Sentis.ModelLoader");
+            Type workerFactoryType = sentisAssembly.GetType("Unity.Sentis.WorkerFactory");
+            Type backendType = sentisAssembly.GetType("Unity.Sentis.BackendType");
+            Type textureConverterType = sentisAssembly.GetType("Unity.Sentis.TextureConverter");
+            Type textureType = typeof(Texture);
+
+            if (modelLoaderType == null || workerFactoryType == null || backendType == null || textureConverterType == null)
+            {
+                lastError = "Unity Sentis API types were not found. Check Sentis package integrity/version.";
+                return false;
+            }
+
+            modelLoadFromBytes = modelLoaderType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .FirstOrDefault(m => m.Name == "Load" &&
+                                     m.GetParameters().Length == 1 &&
+                                     m.GetParameters()[0].ParameterType == typeof(byte[]));
+
+            if (modelLoadFromBytes == null)
+            {
+                lastError = "Sentis ModelLoader.Load(byte[]) is unavailable. This project requires runtime ONNX loading from StreamingAssets.";
+                return false;
+            }
+
+            runtimeModel = modelLoadFromBytes.Invoke(null, new object[] { modelBytes });
+            if (runtimeModel == null)
+            {
+                lastError = "Sentis returned null runtime model.";
+                return false;
+            }
+
+            workerCreate = workerFactoryType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .FirstOrDefault(m => m.Name == "CreateWorker" && m.GetParameters().Length == 2);
+
+            if (workerCreate == null)
+            {
+                lastError = "Sentis WorkerFactory.CreateWorker overload not found.";
+                return false;
+            }
+
+            object backend = Enum.Parse(backendType, SystemInfo.supportsComputeShaders ? "GPUCompute" : "CPU");
+            worker = workerCreate.Invoke(null, new[] { backend, runtimeModel });
+
+            if (worker == null)
+            {
+                lastError = "Sentis worker creation returned null.";
+                return false;
+            }
+
+            Type workerType = worker.GetType();
+            workerExecute = workerType.GetMethod("Execute", new[] { sentisAssembly.GetType("Unity.Sentis.Tensor") })
+                ?? workerType.GetMethod("Execute", new[] { sentisAssembly.GetType("Unity.Sentis.TensorFloat") })
+                ?? workerType.GetMethods().FirstOrDefault(m => m.Name == "Execute" && m.GetParameters().Length == 1);
+
+            workerPeekOutput = workerType.GetMethods().FirstOrDefault(m => m.Name == "PeekOutput" && m.GetParameters().Length == 0);
+
+            textureToTensor = textureConverterType.GetMethod("ToTensor", new[] { typeof(Texture), typeof(int), typeof(int), typeof(int) })
+                ?? textureConverterType.GetMethod("ToTensor", new[] { typeof(Texture) })
+                ?? textureConverterType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                    .FirstOrDefault(m =>
+                    {
+                        if (m.Name != "ToTensor") return false;
+                        ParameterInfo[] p = m.GetParameters();
+                        return p.Length >= 1 && p[0].ParameterType == textureType;
+                    });
+
+            if (workerExecute == null || workerPeekOutput == null || textureToTensor == null)
+            {
+                lastError = "Sentis execution APIs were not found (Execute/PeekOutput/TextureConverter.ToTensor).";
+                return false;
+            }
+
+            return true;
         }
 
         public List<DetectionResult> RunInference(Texture2D frame)
         {
-#if ONNX_RUNTIME
-            if (!isLoaded || session == null)
+            if (!isLoaded || worker == null)
             {
-                Debug.LogWarning("[ONNXEngine] Model not loaded. Skipping inference.");
                 return new List<DetectionResult>();
             }
 
+            if (frame == null)
+            {
+                return new List<DetectionResult>();
+            }
+
+            object inputTensor = null;
+            object outputTensor = null;
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-
-            float[] inputTensor = PreprocessFrame(frame);
-
-            List<DetectionResult> rawDetections = ExecuteModel(inputTensor, frame.width, frame.height);
-
-            List<DetectionResult> finalDetections = ApplyNMS(rawDetections);
-
-            if (finalDetections.Count > maxDetections)
-            {
-                finalDetections = finalDetections.Take(maxDetections).ToList();
-            }
-
-            stopwatch.Stop();
-            lastInferenceTimeMs = (float)stopwatch.Elapsed.TotalMilliseconds;
-
-            return finalDetections;
-#else
-            Debug.LogWarning("[ONNXEngine] ONNX Runtime not available. Returning empty detections.");
-            return new List<DetectionResult>();
-#endif
-        }
-
-        private float[] PreprocessFrame(Texture2D frame)
-        {
-            RenderTexture rt = RenderTexture.GetTemporary(inputWidth, inputHeight);
-            Graphics.Blit(frame, rt);
-
-            Texture2D resized = new Texture2D(inputWidth, inputHeight, TextureFormat.RGB24, false);
-            RenderTexture.active = rt;
-            resized.ReadPixels(new Rect(0, 0, inputWidth, inputHeight), 0, 0);
-            resized.Apply();
-            RenderTexture.active = null;
-            RenderTexture.ReleaseTemporary(rt);
-
-            Color[] pixels = resized.GetPixels();
-            float[] tensor = new float[3 * inputWidth * inputHeight];
-
-            for (int i = 0; i < pixels.Length; i++)
-            {
-                tensor[i] = pixels[i].r;
-                tensor[pixels.Length + i] = pixels[i].g;
-                tensor[2 * pixels.Length + i] = pixels[i].b;
-            }
-
-            Destroy(resized);
-            return tensor;
-        }
-
-#if ONNX_RUNTIME
-        private List<DetectionResult> ExecuteModel(float[] inputTensor, int originalWidth, int originalHeight)
-        {
-            var detections = new List<DetectionResult>();
 
             try
             {
-                var tensor = new DenseTensor<float>(inputTensor, new[] { 1, 3, inputHeight, inputWidth });
-                var inputs = new List<NamedOnnxValue>
+                object[] args = BuildTextureToTensorArgs(frame, textureToTensor);
+                inputTensor = textureToTensor.Invoke(null, args);
+
+                workerExecute.Invoke(worker, new[] { inputTensor });
+                outputTensor = workerPeekOutput.Invoke(worker, null);
+                float[] outputData = ExtractTensorData(outputTensor);
+                int[] shape = ExtractTensorShape(outputTensor);
+
+                List<DetectionResult> rawDetections = ParseYoloOutput(outputData, shape, frame.width, frame.height);
+                List<DetectionResult> nmsDetections = ApplyNMS(rawDetections);
+
+                if (nmsDetections.Count > maxDetections)
                 {
-                    NamedOnnxValue.CreateFromTensor(inputName, tensor)
-                };
-
-                using (var results = session.Run(inputs))
-                {
-                    var output = results.First();
-                    var outputTensor = output.AsTensor<float>();
-                    var outputDims = outputTensor.Dimensions.ToArray();
-
-                    float scaleX = (float)originalWidth / inputWidth;
-                    float scaleY = (float)originalHeight / inputHeight;
-
-                    int numClasses = labels.Length;
-
-                    if (outputDims.Length == 3 && outputDims[0] == 1)
-                    {
-                        int numDetections = outputDims[2];
-                        int rowSize = outputDims[1];
-
-                        for (int i = 0; i < numDetections; i++)
-                        {
-                            float cx = outputTensor[0, 0, i];
-                            float cy = outputTensor[0, 1, i];
-                            float w  = outputTensor[0, 2, i];
-                            float h  = outputTensor[0, 3, i];
-
-                            float bestConf = 0f;
-                            int bestClass = -1;
-
-                            for (int c = 0; c < numClasses && (c + 4) < rowSize; c++)
-                            {
-                                float conf = outputTensor[0, 4 + c, i];
-                                if (conf > bestConf)
-                                {
-                                    bestConf = conf;
-                                    bestClass = c;
-                                }
-                            }
-
-                            if (bestConf >= confidenceThreshold && bestClass >= 0)
-                            {
-                                float x1 = (cx - w / 2f) * scaleX;
-                                float y1 = (cy - h / 2f) * scaleY;
-                                float bw = w * scaleX;
-                                float bh = h * scaleY;
-
-                                Rect box = new Rect(x1, y1, bw, bh);
-                                string label = GetLabel(bestClass);
-
-                                detections.Add(new DetectionResult(bestClass, label, bestConf, box));
-                            }
-                        }
-                    }
-                    else if (outputDims.Length == 2)
-                    {
-                        int numDetections = outputDims[0];
-                        int colSize = outputDims[1];
-
-                        for (int i = 0; i < numDetections; i++)
-                        {
-                            float cx = outputTensor[i, 0];
-                            float cy = outputTensor[i, 1];
-                            float w  = outputTensor[i, 2];
-                            float h  = outputTensor[i, 3];
-                            float objectness = colSize > 4 ? outputTensor[i, 4] : 1.0f;
-
-                            if (objectness < confidenceThreshold) continue;
-
-                            float bestConf = 0f;
-                            int bestClass = -1;
-                            int classOffset = colSize > 5 ? 5 : 4;
-
-                            for (int c = 0; c < numClasses && (c + classOffset) < colSize; c++)
-                            {
-                                float conf = outputTensor[i, classOffset + c] * objectness;
-                                if (conf > bestConf)
-                                {
-                                    bestConf = conf;
-                                    bestClass = c;
-                                }
-                            }
-
-                            if (bestConf >= confidenceThreshold && bestClass >= 0)
-                            {
-                                float x1 = (cx - w / 2f) * scaleX;
-                                float y1 = (cy - h / 2f) * scaleY;
-                                float bw = w * scaleX;
-                                float bh = h * scaleY;
-
-                                Rect box = new Rect(x1, y1, bw, bh);
-                                string label = GetLabel(bestClass);
-
-                                detections.Add(new DetectionResult(bestClass, label, bestConf, box));
-                            }
-                        }
-                    }
-                    else
-                    {
-                        Debug.LogWarning($"[ONNXEngine] Unexpected output shape: [{string.Join(", ", outputDims)}]");
-                    }
-
-                    Debug.Log($"[ONNXEngine] Raw detections: {detections.Count}");
+                    nmsDetections = nmsDetections.Take(maxDetections).ToList();
                 }
+
+                stopwatch.Stop();
+                lastInferenceTimeMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+                return nmsDetections;
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[ONNXEngine] Inference error: {ex.Message}");
+                Debug.LogError($"[ONNXEngine] Inference failed: {ex.Message}");
+                return new List<DetectionResult>();
+            }
+            finally
+            {
+                stopwatch.Stop();
+                lastInferenceTimeMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+
+                if (inputTensor is IDisposable disposableInput)
+                {
+                    disposableInput.Dispose();
+                }
+
+                if (outputTensor is IDisposable disposableOutput)
+                {
+                    disposableOutput.Dispose();
+                }
+            }
+        }
+
+        private object[] BuildTextureToTensorArgs(Texture2D frame, MethodInfo method)
+        {
+            ParameterInfo[] parameters = method.GetParameters();
+
+            if (parameters.Length == 1)
+            {
+                return new object[] { frame };
             }
 
+            if (parameters.Length == 4 &&
+                parameters[1].ParameterType == typeof(int) &&
+                parameters[2].ParameterType == typeof(int) &&
+                parameters[3].ParameterType == typeof(int))
+            {
+                return new object[] { frame, inputWidth, inputHeight, 3 };
+            }
+
+            object[] args = new object[parameters.Length];
+            args[0] = frame;
+            for (int i = 1; i < parameters.Length; i++)
+            {
+                args[i] = parameters[i].HasDefaultValue ? parameters[i].DefaultValue : Activator.CreateInstance(parameters[i].ParameterType);
+            }
+
+            return args;
+        }
+
+        private float[] ExtractTensorData(object tensor)
+        {
+            if (tensor == null)
+            {
+                throw new InvalidOperationException("Sentis output tensor is null.");
+            }
+
+            MethodInfo makeReadable = tensor.GetType().GetMethod("MakeReadable", Type.EmptyTypes);
+            makeReadable?.Invoke(tensor, null);
+
+            MethodInfo toReadOnlyArray = tensor.GetType().GetMethod("ToReadOnlyArray", Type.EmptyTypes);
+            if (toReadOnlyArray == null)
+            {
+                throw new InvalidOperationException("Sentis output tensor does not expose ToReadOnlyArray().");
+            }
+
+            return toReadOnlyArray.Invoke(tensor, null) as float[];
+        }
+
+        private int[] ExtractTensorShape(object tensor)
+        {
+            if (tensor == null)
+            {
+                return Array.Empty<int>();
+            }
+
+            PropertyInfo shapeProp = tensor.GetType().GetProperty("shape");
+            object shapeObj = shapeProp?.GetValue(tensor);
+            if (shapeObj == null)
+            {
+                return Array.Empty<int>();
+            }
+
+            MethodInfo toArray = shapeObj.GetType().GetMethod("ToArray", Type.EmptyTypes);
+            if (toArray != null)
+            {
+                if (toArray.Invoke(shapeObj, null) is int[] dims)
+                {
+                    return dims;
+                }
+            }
+
+            PropertyInfo rankProp = shapeObj.GetType().GetProperty("rank");
+            PropertyInfo indexer = shapeObj.GetType().GetProperty("Item");
+            if (rankProp != null && indexer != null)
+            {
+                int rank = (int)rankProp.GetValue(shapeObj);
+                int[] dims = new int[rank];
+                for (int i = 0; i < rank; i++)
+                {
+                    dims[i] = (int)indexer.GetValue(shapeObj, new object[] { i });
+                }
+                return dims;
+            }
+
+            return Array.Empty<int>();
+        }
+
+        private List<DetectionResult> ParseYoloOutput(float[] output, int[] shape, int originalWidth, int originalHeight)
+        {
+            List<DetectionResult> detections = new List<DetectionResult>();
+            if (output == null || output.Length == 0)
+            {
+                return detections;
+            }
+
+            int numClasses = labels.Length;
+            if (numClasses <= 0)
+            {
+                Debug.LogError("[ONNXEngine] Labels are not loaded; cannot decode YOLO classes.");
+                return detections;
+            }
+
+            if (shape.Length == 3 && shape[0] == 1)
+            {
+                // Common YOLOv8 output: [1,84,8400]
+                if (shape[1] >= 5 && shape[2] > 0)
+                {
+                    DecodeYolo3DChannelFirst(output, shape[1], shape[2], numClasses, originalWidth, originalHeight, detections);
+                    return detections;
+                }
+
+                // Alternate: [1,8400,84]
+                if (shape[2] >= 5 && shape[1] > 0)
+                {
+                    DecodeYolo3DBoxFirst(output, shape[1], shape[2], numClasses, originalWidth, originalHeight, detections);
+                    return detections;
+                }
+            }
+
+            if (shape.Length == 2 && shape[1] >= 5)
+            {
+                DecodeYolo2D(output, shape[0], shape[1], numClasses, originalWidth, originalHeight, detections);
+                return detections;
+            }
+
+            Debug.LogWarning($"[ONNXEngine] Unsupported output shape [{string.Join(",", shape)}], output length={output.Length}.");
             return detections;
         }
-#endif
+
+        private void DecodeYolo3DChannelFirst(float[] output, int channels, int numBoxes, int numClasses, int originalWidth, int originalHeight, List<DetectionResult> detections)
+        {
+            for (int i = 0; i < numBoxes; i++)
+            {
+                float cx = output[i + 0 * numBoxes];
+                float cy = output[i + 1 * numBoxes];
+                float w = output[i + 2 * numBoxes];
+                float h = output[i + 3 * numBoxes];
+
+                float bestConf = 0f;
+                int bestClass = -1;
+
+                for (int c = 0; c < numClasses && (4 + c) < channels; c++)
+                {
+                    float score = output[i + (4 + c) * numBoxes];
+                    if (score > bestConf)
+                    {
+                        bestConf = score;
+                        bestClass = c;
+                    }
+                }
+
+                AddDetectionIfValid(cx, cy, w, h, bestClass, bestConf, originalWidth, originalHeight, detections);
+            }
+        }
+
+        private void DecodeYolo3DBoxFirst(float[] output, int numBoxes, int channels, int numClasses, int originalWidth, int originalHeight, List<DetectionResult> detections)
+        {
+            for (int i = 0; i < numBoxes; i++)
+            {
+                int rowOffset = i * channels;
+                float cx = output[rowOffset + 0];
+                float cy = output[rowOffset + 1];
+                float w = output[rowOffset + 2];
+                float h = output[rowOffset + 3];
+
+                float bestConf = 0f;
+                int bestClass = -1;
+
+                for (int c = 0; c < numClasses && (4 + c) < channels; c++)
+                {
+                    float score = output[rowOffset + 4 + c];
+                    if (score > bestConf)
+                    {
+                        bestConf = score;
+                        bestClass = c;
+                    }
+                }
+
+                AddDetectionIfValid(cx, cy, w, h, bestClass, bestConf, originalWidth, originalHeight, detections);
+            }
+        }
+
+        private void DecodeYolo2D(float[] output, int rows, int cols, int numClasses, int originalWidth, int originalHeight, List<DetectionResult> detections)
+        {
+            for (int i = 0; i < rows; i++)
+            {
+                int rowOffset = i * cols;
+                float cx = output[rowOffset + 0];
+                float cy = output[rowOffset + 1];
+                float w = output[rowOffset + 2];
+                float h = output[rowOffset + 3];
+
+                float objectness = cols > 4 ? output[rowOffset + 4] : 1f;
+                if (objectness < confidenceThreshold)
+                {
+                    continue;
+                }
+
+                float bestConf = 0f;
+                int bestClass = -1;
+
+                for (int c = 0; c < numClasses && (5 + c) < cols; c++)
+                {
+                    float score = output[rowOffset + 5 + c] * objectness;
+                    if (score > bestConf)
+                    {
+                        bestConf = score;
+                        bestClass = c;
+                    }
+                }
+
+                AddDetectionIfValid(cx, cy, w, h, bestClass, bestConf, originalWidth, originalHeight, detections);
+            }
+        }
+
+        private void AddDetectionIfValid(float cx, float cy, float w, float h, int classId, float confidence, int originalWidth, int originalHeight, List<DetectionResult> detections)
+        {
+            if (classId < 0 || confidence < confidenceThreshold)
+            {
+                return;
+            }
+
+            float scaleX = (float)originalWidth / inputWidth;
+            float scaleY = (float)originalHeight / inputHeight;
+
+            float x = (cx - w * 0.5f) * scaleX;
+            float y = (cy - h * 0.5f) * scaleY;
+            float width = w * scaleX;
+            float height = h * scaleY;
+
+            x = Mathf.Clamp(x, 0f, originalWidth - 1f);
+            y = Mathf.Clamp(y, 0f, originalHeight - 1f);
+            width = Mathf.Clamp(width, 1f, originalWidth - x);
+            height = Mathf.Clamp(height, 1f, originalHeight - y);
+
+            detections.Add(new DetectionResult(classId, GetLabel(classId), confidence, new Rect(x, y, width, height)));
+        }
 
         private List<DetectionResult> ApplyNMS(List<DetectionResult> detections)
         {
-            if (detections.Count == 0) return detections;
+            if (detections.Count == 0)
+            {
+                return detections;
+            }
 
             detections.Sort((a, b) => b.confidence.CompareTo(a.confidence));
-
             List<DetectionResult> kept = new List<DetectionResult>();
             bool[] suppressed = new bool[detections.Count];
 
             for (int i = 0; i < detections.Count; i++)
             {
-                if (suppressed[i]) continue;
+                if (suppressed[i])
+                {
+                    continue;
+                }
+
                 kept.Add(detections[i]);
 
                 for (int j = i + 1; j < detections.Count; j++)
                 {
-                    if (suppressed[j]) continue;
-                    if (detections[i].classId != detections[j].classId) continue;
+                    if (suppressed[j] || detections[i].classId != detections[j].classId)
+                    {
+                        continue;
+                    }
 
-                    float iou = ComputeIOU(detections[i].boundingBox, detections[j].boundingBox);
-                    if (iou > nmsThreshold)
+                    if (ComputeIOU(detections[i].boundingBox, detections[j].boundingBox) > nmsThreshold)
                     {
                         suppressed[j] = true;
                     }
@@ -345,30 +630,31 @@ namespace NomadGo.Vision
 
             float intersectionArea = Mathf.Max(0, x2 - x1) * Mathf.Max(0, y2 - y1);
             float unionArea = a.width * a.height + b.width * b.height - intersectionArea;
+            if (unionArea <= 0f)
+            {
+                return 0f;
+            }
 
-            if (unionArea <= 0) return 0f;
             return intersectionArea / unionArea;
         }
 
         public string GetLabel(int classId)
         {
-            if (labels != null && classId >= 0 && classId < labels.Length)
+            if (classId >= 0 && classId < labels.Length)
             {
                 return labels[classId];
             }
+
             return $"class_{classId}";
         }
 
         private void OnDestroy()
         {
-#if ONNX_RUNTIME
-            if (session != null)
+            if (worker is IDisposable workerDisposable)
             {
-                session.Dispose();
-                session = null;
-                Debug.Log("[ONNXEngine] Inference session disposed.");
+                workerDisposable.Dispose();
+                worker = null;
             }
-#endif
         }
     }
 }
