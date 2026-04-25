@@ -1,0 +1,53 @@
+name: Build Web Application
+
+on:
+  push:
+    branches:
+      - main
+      - claude/github-actions-workflow-2ELGO
+    paths:
+      - 'client/**'
+      - 'server/**'
+      - 'shared/**'
+      - 'script/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'vite.config.ts'
+      - '.github/workflows/build-web.yml'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: Build Web App
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type check
+        run: npm run check
+
+      - name: Build application
+        run: npm run build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: NomadGo-SpatialVision-web
+          path: dist/
+          retention-days: 14
