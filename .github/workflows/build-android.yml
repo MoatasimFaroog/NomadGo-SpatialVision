@@ -29,6 +29,8 @@ jobs:
     name: Build for Android
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    env:
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -63,7 +65,7 @@ jobs:
           buildName: NomadGo-SpatialVision-debug
 
       - name: Build Android APK (signed release)
-        if: ${{ github.event.inputs.build_type != 'debug' && secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: ${{ github.event.inputs.build_type != 'debug' && env.HAS_KEYSTORE == 'true' }}
         uses: game-ci/unity-builder@v4
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
