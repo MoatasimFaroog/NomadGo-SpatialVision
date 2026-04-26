@@ -13,15 +13,6 @@
     "com.unity.modules.audio": "1.0.0",
     "com.unity.modules.physics": "1.0.0",
     "com.unity.nuget.newtonsoft-json": "3.2.1",
-    "com.unity.sentis": "0.7.0"
-  },
-  "scopedRegistries": [
-    {
-      "name": "NPM",
-      "url": "https://registry.npmjs.org",
-      "scopes": [
-        "com.unity"
-      ]
-    }
-  ]
+    "com.unity.sentis": "1.2.0"
+  }
 }
