@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.XR.ARFoundation;
+using Unity.XR.CoreUtils;
 
 public static class ARRuntimeSetup
 {
@@ -10,6 +11,12 @@ public static class ARRuntimeSetup
         if (arSession != null && arSession.GetComponent<ARSession>() == null)
         {
             arSession.AddComponent<ARSession>();
+        }
+
+        GameObject originObj = GameObject.Find("AR Session Origin");
+        if (originObj != null && originObj.GetComponent<XROrigin>() == null)
+        {
+            originObj.AddComponent<XROrigin>();
         }
 
         Camera cam = Camera.main;
