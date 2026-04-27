@@ -14,14 +14,22 @@ public static class ARRuntimeSetup
         }
 
         GameObject originObj = GameObject.Find("AR Session Origin");
-        if (originObj != null && originObj.GetComponent<XROrigin>() == null)
+        XROrigin xrOrigin = null;
+
+        if (originObj != null)
         {
-            originObj.AddComponent<XROrigin>();
+            xrOrigin = originObj.GetComponent<XROrigin>();
+            if (xrOrigin == null)
+                xrOrigin = originObj.AddComponent<XROrigin>();
         }
 
         Camera cam = Camera.main;
+
         if (cam != null)
         {
+            if (xrOrigin != null)
+                xrOrigin.Camera = cam;
+
             if (cam.GetComponent<ARCameraManager>() == null)
                 cam.gameObject.AddComponent<ARCameraManager>();
 
