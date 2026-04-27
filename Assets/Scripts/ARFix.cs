@@ -1,17 +1,15 @@
 using UnityEngine;
 
-public class ARFix : MonoBehaviour
+public class ARFix
 {
-    void Start()
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    static void Init()
     {
         Camera cam = Camera.main;
 
         if (cam != null)
         {
-            // أهم سطر لإزالة الشاشة الزرقاء
             cam.clearFlags = CameraClearFlags.Depth;
-
-            // تأكيد الخلفية شفافة
             cam.backgroundColor = Color.black;
         }
     }
